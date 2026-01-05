@@ -1,0 +1,4 @@
+{
+  "name": "Invoice2CSV Automator",
+  "description": "An AI-powered invoice extraction tool that converts PDF/Image invoices into structured inventory CSV files using Gemini 1.5 Flash."
+}
