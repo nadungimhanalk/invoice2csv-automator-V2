@@ -99,12 +99,12 @@ const extractData = async (
         // Suffix Cleanup: Remove '-X' or ' - X' or ' -X' etc.
         // We use a regex to handle standard and spaced variants
         // "THC010-X", "THC010 - X"
-        // --- Custom Cleanup for Slim Healthcare ---
-        if (customerType === CustomerType.SLIM_HEALTHCARE) {
+        // --- Custom Cleanup for Slim Healthcare AND Cliniqon Biotech ---
+        if (customerType === CustomerType.SLIM_HEALTHCARE || customerType === CustomerType.CLINIQON_BIOTECH) {
           // Remove any suffix pattern like "- S", "- X", " - S"
           // Pattern: Hyphen followed by optional space and a single letter at the end
           sku = sku.replace(/\s*-\s*[a-zA-Z]$/i, '');
-          
+
           // Remove " - <anything>" pattern (Space Hyphen Space Anything)
           sku = sku.replace(/\s+-\s+.*$/i, '');
         }
