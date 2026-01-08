@@ -55,3 +55,13 @@ export interface CustomerMasterEntry {
   customerName: string;
   customerCode: string;
 }
+
+export type ProcessStatus = 'pending' | 'processing' | 'completed' | 'error';
+
+export interface FileProcessingStatus {
+  id: string;
+  name: string;
+  status: ProcessStatus;
+  message?: string;
+  result?: InvoiceData;
+}

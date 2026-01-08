@@ -4,19 +4,15 @@ import Dropzone from './components/Dropzone';
 import PreviewTable from './components/PreviewTable';
 import { extractImageInvoiceData, extractPdfInvoiceData } from './services/gemini';
 import { generateExcelBlob, downloadFile } from './utils/csvHelper';
-import { InvoiceData, AppStatus, CustomerType, CustomerMasterEntry } from './types';
-import { Loader2, Download, AlertTriangle, CheckCircle, Archive } from 'lucide-react';
+import { InvoiceData, FileProcessingStatus, CustomerType, CustomerMasterEntry } from './types';
+import { Download, AlertTriangle, Archive, FileCheck, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import JSZip from 'jszip';
-
 import MappingEditor from './components/MappingEditor';
-import { Settings } from 'lucide-react';
-
 import { DEFAULT_MAPPING } from './utils/constants';
 
 const App: React.FC = () => {
-  const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
+  const [fileStatuses, setFileStatuses] = useState<FileProcessingStatus[]>([]);
   const [invoices, setInvoices] = useState<InvoiceData[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string>('');
 
   // Mapping State
   const [isMappingOpen, setIsMappingOpen] = useState(false);
@@ -32,8 +28,6 @@ const App: React.FC = () => {
 
   // Customer Selection State
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerType>(CustomerType.SLIM_HEALTHCARE);
-
-  // Customer Master State
   const [customerMaster, setCustomerMaster] = useState<CustomerMasterEntry[]>(() => {
     const saved = localStorage.getItem('customerMasterConfig');
     return saved ? JSON.parse(saved) : [];
@@ -45,111 +39,84 @@ const App: React.FC = () => {
   };
 
   const processFiles = async (files: File[]) => {
-    setStatus(AppStatus.PROCESSING);
-    setErrorMessage('');
+    // Initialize statuses
+    const newStatuses: FileProcessingStatus[] = files.map(file => ({
+      id: Math.random().toString(36).substr(2, 9),
+      name: file.name,
+      status: 'pending'
+    }));
 
-    const processSingleFile = (file: File): Promise<InvoiceData> => {
-      return new Promise((resolve, reject) => {
+    setFileStatuses(prev => [...prev, ...newStatuses]);
+
+    // Process sequentially to be "smooth" or parallel? Parallel is faster.
+    // We will process parallel but track status individually.
+
+    // Map files to their IDs for tracking
+    const fileMap = files.map((file, index) => ({ file, id: newStatuses[index].id }));
+
+    const promises = fileMap.map(async ({ file, id }) => {
+      // Update to processing
+      setFileStatuses(prev => prev.map(s => s.id === id ? { ...s, status: 'processing' } : s));
+
+      try {
+        // Determine extraction method based on file type
         const reader = new FileReader();
-        reader.onload = async () => {
-          try {
-            const base64String = reader.result as string;
-            const base64Data = base64String.split(',')[1];
-            let extractedData: InvoiceData;
-            if (file.type === 'application/pdf') {
-              extractedData = await extractPdfInvoiceData(base64Data, selectedCustomer, customerMaster);
-            } else {
-              extractedData = await extractImageInvoiceData(base64Data, file.type, selectedCustomer, customerMaster);
+        const result = await new Promise<InvoiceData>((resolve, reject) => {
+          reader.onload = async () => {
+            try {
+              const base64String = reader.result as string;
+              const base64Data = base64String.split(',')[1];
+              let extractedData: InvoiceData;
+              if (file.type === 'application/pdf') {
+                extractedData = await extractPdfInvoiceData(base64Data, selectedCustomer, customerMaster);
+              } else {
+                extractedData = await extractImageInvoiceData(base64Data, file.type, selectedCustomer, customerMaster);
+              }
+              resolve(extractedData);
+            } catch (err) {
+              reject(err);
             }
-            resolve(extractedData);
-          } catch (error) {
-            reject(error);
-          }
-        };
-        reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
-        reader.readAsDataURL(file);
-      });
-    };
+          };
+          reader.onerror = () => reject(new Error("File read error"));
+          reader.readAsDataURL(file);
+        });
 
-    try {
-      const promises = files.map(file => processSingleFile(file));
-      // Use allSettled to allow some files to fail while others succeed
-      const results = await Promise.allSettled(promises);
+        // Update to completed
+        setFileStatuses(prev => prev.map(s => s.id === id ? { ...s, status: 'completed', result } : s));
+        setInvoices(prev => [...prev, result]);
+        return result;
 
-      const successfulData: InvoiceData[] = [];
-      const failedFiles: string[] = [];
-
-      results.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          successfulData.push(result.value);
-        } else {
-          failedFiles.push(files[index].name);
-          console.error(`Error processing ${files[index].name}:`, result.reason);
-        }
-      });
-
-      if (successfulData.length > 0) {
-        setInvoices(prev => [...prev, ...successfulData]);
-        setStatus(AppStatus.SUCCESS);
+      } catch (error: any) {
+        console.error(`Error processing ${file.name}:`, error);
+        setFileStatuses(prev => prev.map(s => s.id === id ? { ...s, status: 'error', message: error.message || "Failed to process" } : s));
+        return null;
       }
+    });
 
-      if (failedFiles.length > 0) {
-        const errorMsg = `Failed to process ${failedFiles.length} file(s): ${failedFiles.join(', ')}.`;
-        setErrorMessage(errorMsg);
-        if (successfulData.length === 0) {
-          setStatus(AppStatus.ERROR);
-        }
-      }
-    } catch (error: any) {
-      console.error(error);
-      setErrorMessage(error.message || "An unexpected error occurred during batch processing.");
-      setStatus(AppStatus.ERROR);
-    }
+    await Promise.allSettled(promises);
   };
 
   const handleBatchDownload = async () => {
     if (invoices.length === 0) return;
-
     if (invoices.length === 1) {
-      // If only one invoice, just download the single Excel file
-      const invoice = invoices[0];
-      const blob = generateExcelBlob([invoice], mappingConfig);
-      const safeRef = invoice.referenceNo.replace(/[^a-z0-9_-]/gi, '_') || 'invoice';
-      downloadFile(blob, `${safeRef}.xlsx`);
+      handleSingleDownload(invoices[0]);
     } else {
-      // If multiple invoices, create a ZIP file containing separate Excel files
       const zip = new JSZip();
-
       invoices.forEach((invoice, index) => {
         const blob = generateExcelBlob([invoice], mappingConfig);
-        // Ensure unique filename in case of duplicate invoice numbers
         let safeRef = invoice.referenceNo.replace(/[^a-z0-9_-]/gi, '_');
         if (!safeRef) safeRef = `invoice_${index + 1}`;
-
-        // If filename exists in zip, append index
         let filename = `${safeRef}.xlsx`;
         let counter = 1;
         while (zip.file(filename)) {
           filename = `${safeRef}_${counter}.xlsx`;
           counter++;
         }
-
         zip.file(filename, blob);
       });
-
       const content = await zip.generateAsync({ type: "blob" });
       const timestamp = new Date().toISOString().slice(0, 10);
-      const zipFilename = `invoices_archive_${timestamp}.zip`;
-
-      // Trigger download
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(content);
-      link.setAttribute("href", url);
-      link.setAttribute("download", zipFilename);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      downloadFile(content, `invoices_archive_${timestamp}.zip`);
     }
   };
 
@@ -163,17 +130,20 @@ const App: React.FC = () => {
     setInvoices(prev => prev.map((inv, i) => i === index ? updatedInvoice : inv));
   };
 
-  const handleReset = () => {
-    setInvoices([]);
-    setStatus(AppStatus.IDLE);
-    setErrorMessage('');
+  const handleRemoveResult = (index: number) => {
+    setInvoices(prev => prev.filter((_, i) => i !== index));
   };
 
+  const clearAll = () => {
+    setInvoices([]);
+    setFileStatuses([]);
+  };
+
+  const isProcessing = fileStatuses.some(s => s.status === 'processing');
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
+    <div className="min-h-screen flex flex-col font-sans text-gray-800">
       <Header onOpenSettings={() => setIsMappingOpen(true)} />
-
-
 
       {isMappingOpen && (
         <MappingEditor
@@ -185,133 +155,123 @@ const App: React.FC = () => {
         />
       )}
 
-      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full">
+      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 items-start">
 
-          {/* Sidebar - Customer Selector */}
-          <div className="lg:col-span-1">
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 sticky top-24 hover:shadow-md transition-shadow duration-300">
-              <label className="block text-[10px] font-bold text-gray-400 mb-4 uppercase tracking-widest">
+          {/* Sidebar Configuration */}
+          <div className="lg:col-span-1 space-y-6">
+            <div className="glass-panel p-6 rounded-3xl sticky top-28 transition-all hover:shadow-lg">
+              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-6">
                 Configuration
-              </label>
+              </h2>
 
-              <div className="mb-4">
-                <label className="block text-sm font-semibold text-gray-800 mb-2">Select Customer</label>
-                <div className="relative">
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-gray-700 mb-2">Customer Profile</label>
+                <div className="relative group">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
+                  </div>
                   <select
                     value={selectedCustomer}
                     onChange={(e) => setSelectedCustomer(e.target.value as CustomerType)}
-                    className="block w-full pl-3 pr-10 py-3 text-sm border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-xl bg-gray-50 hover:bg-white transition-all cursor-pointer font-medium"
+                    className="block w-full pl-8 pr-10 py-3 text-sm border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-xl bg-white/50 hover:bg-white transition-all cursor-pointer font-semibold shadow-sm text-gray-700 appearance-none"
                   >
                     <option value={CustomerType.SLIM_HEALTHCARE}>Slim Healthcare</option>
                     <option value={CustomerType.CLINIQON_BIOTECH}>Cliniqon Biotech</option>
                   </select>
+                  <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                    <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                  </div>
                 </div>
+                <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                  Determines how the AI interprets the invoice structure.
+                </p>
               </div>
-
-              <p className="text-xs text-gray-400 leading-relaxed pt-2 border-t border-gray-50">
-                Select the correct customer format to ensure the AI extracts fields accurately.
-              </p>
-            </div>
-          </div>
-
-          {/* Main Content Area */}
-          <div className="lg:col-span-3 space-y-8">
-
-            {/* Upload Section */}
-            <div className="bg-white rounded-2xl p-1 shadow-sm border border-gray-100">
-              <Dropzone onFilesSelect={processFiles} isProcessing={status === AppStatus.PROCESSING} />
             </div>
 
-            {/* Status Indicators */}
-            {
-              status === AppStatus.PROCESSING && (
-                <div className="flex flex-col items-center justify-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm animate-pulse">
-                  <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
-                  <p className="text-lg text-gray-800 font-semibold tracking-tight">Processing Documents...</p>
-                  <p className="text-sm text-gray-500 font-medium">Extracting data with Gemini AI</p>
-                </div>
-              )
-            }
-
-            {/* Error Display */}
-            {
-              errorMessage && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-6 flex flex-col items-center text-center">
-                  <AlertTriangle className="w-10 h-10 text-red-600 mb-2" />
-                  <h3 className="text-lg font-medium text-red-900">Processing Issues</h3>
-                  <p className="text-red-700 mt-1">{errorMessage}</p>
-                  {status === AppStatus.ERROR && (
-                    <button
-                      onClick={() => setStatus(AppStatus.IDLE)}
-                      className="mt-4 px-4 py-2 bg-white border border-red-300 rounded-md text-red-700 hover:bg-red-50 font-medium text-sm"
-                    >
-                      Try Again
-                    </button>
+            {/* Processing Queue List */}
+            {fileStatuses.length > 0 && (
+              <div className="glass-panel p-5 rounded-3xl animate-fade-in">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide">Activity Queue</h3>
+                  {fileStatuses.every(s => s.status !== 'processing') && (
+                    <button onClick={() => setFileStatuses([])} className="text-[10px] text-gray-400 hover:text-red-500 transition-colors">Clear</button>
                   )}
                 </div>
-              )
-            }
-
-            {/* Results Section */}
-            {
-              invoices.length > 0 && (
-                <div className="space-y-6 animate-fade-in">
-                  <div className="flex justify-between items-end border-b border-gray-200 pb-4">
-                    <div>
-                      <h2 className="text-2xl font-bold text-gray-900">Extraction Results</h2>
-                      <p className="text-gray-500 mt-1">Review and export your data</p>
+                <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+                  {fileStatuses.map((file) => (
+                    <div key={file.id} className="flex items-center gap-3 bg-white/40 p-2.5 rounded-xl border border-white/50 shadow-sm">
+                      <div className="flex-shrink-0">
+                        {file.status === 'pending' && <div className="w-2 h-2 bg-gray-300 rounded-full ml-1"></div>}
+                        {file.status === 'processing' && <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />}
+                        {file.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                        {file.status === 'error' && <XCircle className="w-4 h-4 text-red-500" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-gray-700 truncate">{file.name}</p>
+                        <p className={`text-[10px] ${file.status === 'error' ? 'text-red-500' :
+                            file.status === 'completed' ? 'text-green-600' :
+                              file.status === 'processing' ? 'text-indigo-500' : 'text-gray-400'
+                          }`}>
+                          {file.status === 'processing' ? 'Extracting...' :
+                            file.status === 'completed' ? 'Ready' :
+                              file.status === 'error' ? 'Failed' : 'Queued'}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex gap-3">
-                      <button
-                        onClick={handleReset}
-                        className="px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-colors text-sm"
-                      >
-                        Clear All
-                      </button>
-                      {invoices.length > 1 && (
-                        <button
-                          onClick={handleBatchDownload}
-                          className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-md transition-all transform hover:-translate-y-0.5 font-medium text-sm"
-                        >
-                          <Archive className="w-4 h-4" />
-                          Download All (ZIP)
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {invoices.map((invoice, idx) => (
-                    <PreviewTable
-                      key={idx}
-                      data={invoice}
-                      onDownload={() => handleSingleDownload(invoice)}
-                      onUpdate={(updatedData) => handleInvoiceUpdate(idx, updatedData)}
-                    />
                   ))}
-
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3">
-                    <CheckCircle className="w-5 h-5 text-green-600" />
-                    <div>
-                      <p className="text-sm font-medium text-green-900">Verified</p>
-                      <p className="text-xs text-green-700">Data ready for inventory system import.</p>
-                    </div>
-                  </div>
                 </div>
-              )
-            }
+              </div>
+            )}
+          </div>
+
+          {/* Main Workspace */}
+          <div className="lg:col-span-3">
+            <Dropzone onFilesSelect={processFiles} isProcessing={isProcessing} fileStatuses={fileStatuses} />
+
+            {/* Summary / Actions */}
+            {invoices.length > 0 && (
+              <div className="mb-6 flex justify-between items-end animate-slide-up">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-800">Results</h2>
+                  <p className="text-sm text-gray-500">
+                    Running total: <span className="font-mono font-semibold text-indigo-600">{invoices.length}</span> invoices
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={clearAll}
+                    className="px-4 py-2 bg-white/50 text-gray-600 border border-gray-200/50 rounded-xl hover:bg-red-50 hover:text-red-600 hover:border-red-100 font-medium transition-all text-sm backdrop-blur-sm"
+                  >
+                    Clear Workspace
+                  </button>
+                  <button
+                    onClick={handleBatchDownload}
+                    className="flex items-center gap-2 px-6 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 shadow-lg shadow-gray-900/20 transition-all transform hover:-translate-y-0.5 font-medium text-sm"
+                  >
+                    <Archive className="w-4 h-4" />
+                    Download All (ZIP)
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Invoices List */}
+            <div className="space-y-6">
+              {invoices.map((invoice, idx) => (
+                <PreviewTable
+                  key={idx}
+                  index={idx}
+                  data={invoice}
+                  onDownload={() => handleSingleDownload(invoice)}
+                  onUpdate={(updatedData) => handleInvoiceUpdate(idx, updatedData)}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </main>
-
-      <footer className="bg-white border-t border-gray-200 mt-auto">
-        <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-          <p className="text-center text-sm text-gray-400">
-            &copy; {new Date().getFullYear()} Invoice Automator. Private Internal Tool.
-          </p>
-        </div>
-      </footer>
-    </div >
+    </div>
   );
 };
 

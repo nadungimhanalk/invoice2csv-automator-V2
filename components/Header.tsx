@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileSpreadsheet, Bot, Settings } from 'lucide-react';
+import { Settings, Sparkles } from 'lucide-react';
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -7,32 +7,38 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
   return (
-    <header className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
+    <header className="glass-header sticky top-0 z-50 transition-all duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="bg-white p-1 rounded-xl border border-gray-100 shadow-sm">
-              <img src="/logo.png" alt="Invoice Automator Logo" className="w-10 h-10 object-contain rounded-lg" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900 tracking-tight">Invoice to CSV Automator</h1>
-              <div className="flex flex-col gap-0.5 items-start">
-                <p className="text-xs text-gray-500 font-medium bg-gray-100 px-2 py-0.5 rounded-full w-fit mt-1 border border-gray-200">
-                  Tool Creator Gimhana
-                </p>
-                <p className="text-[10px] text-gray-400 font-light mt-0.5 max-w-md hidden sm:block">
-                  Automated data extraction for your inventory system.
-                </p>
+          <div className="flex items-center gap-4 group cursor-default">
+            <div className="relative">
+              <div className="absolute inset-0 bg-indigo-500 blur-lg opacity-20 group-hover:opacity-40 transition-opacity duration-500 rounded-full"></div>
+              <div className="relative bg-white/80 p-2 rounded-2xl border border-white/50 shadow-sm transition-transform duration-300 group-hover:scale-105">
+                <img src="/logo.png" alt="Invoice Automator Logo" className="w-10 h-10 object-contain" />
               </div>
             </div>
+
+            <div>
+              <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 via-gray-700 to-gray-900 tracking-tight flex items-center gap-2">
+                Invoice Automator
+                <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 text-[10px] font-bold border border-indigo-100 uppercase tracking-wider">
+                  Data Engine
+                </span>
+              </h1>
+              <p className="text-xs text-gray-500 font-medium flex items-center gap-1.5 mt-0.5">
+                <Sparkles className="w-3 h-3 text-amber-400 fill-amber-400" />
+                Powered by Gemini AI
+              </p>
+            </div>
           </div>
+
           <div>
             <button
               onClick={onOpenSettings}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-full border border-gray-200 hover:bg-gray-100 hover:text-gray-900 transition-all font-medium text-sm shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-white/50 hover:bg-white text-gray-700 rounded-full border border-gray-200/50 hover:border-gray-300 transition-all duration-300 font-medium text-sm shadow-sm hover:shadow-md backdrop-blur-sm active:scale-95"
             >
-              <Settings size={18} />
-              <span className="hidden sm:inline">Settings</span>
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Configuration</span>
             </button>
           </div>
         </div>
