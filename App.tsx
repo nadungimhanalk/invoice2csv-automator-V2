@@ -104,12 +104,12 @@ const App: React.FC = () => {
       const zip = new JSZip();
       invoices.forEach((invoice, index) => {
         const blob = generateExcelBlob([invoice], mappingConfig);
-        let safeRef = invoice.referenceNo.replace(/[^a-z0-9_-]/gi, '_');
+        let safeRef = invoice.referenceNo.replace(/[^a-z0-9_ -]/gi, '_');
         if (!safeRef) safeRef = `invoice_${index + 1}`;
         let filename = `${safeRef}.xlsx`;
         let counter = 1;
         while (zip.file(filename)) {
-          filename = `${safeRef}_${counter}.xlsx`;
+          filename = `${safeRef} (${counter}).xlsx`;
           counter++;
         }
         zip.file(filename, blob);
@@ -122,7 +122,7 @@ const App: React.FC = () => {
 
   const handleSingleDownload = (invoice: InvoiceData) => {
     const blob = generateExcelBlob([invoice], mappingConfig);
-    const safeRef = invoice.referenceNo.replace(/[^a-z0-9_-]/gi, '_');
+    const safeRef = invoice.referenceNo.replace(/[^a-z0-9_ -]/gi, '_');
     downloadFile(blob, `${safeRef}.xlsx`);
   };
 
